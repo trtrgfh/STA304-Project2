@@ -1,0 +1,260 @@
+---
+title: "A study of finding the factors that influence people's satisfaction with their life"
+author: "Yujing Hua, Tingyi Li, Kaicheng Huang, Yehao Zhengs"
+date: "Oct 19, 202e"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+## Abstract
+
+In nowadays, more and more people suffer from depression and lose confidence in life. According to the survey, people's life satisfaction is only 70 to 80 percent and this is the main reason why some people hurt themselves or even commit suicide. Thus, we wanted to look at what factors might affect their satisfaction with life. In this report, we create a multi-linear model to find the relationship between felling-live and age, number of children, gender, marital status, education, income, and number of hours they worked. From the model, we surprisedly found that high income will not influence people's feelings about their life, in contrast, marriage is the main factor that can cause depression for people.
+
+## Introduction
+
+We aim to find the factors which are related to people's satisfaction with their life, and how significant they are. First we abstract data from GSS and select some variables we mentioned above to create a model and plots to find out how does each variable we chose influences feeling-live specifically. Thus, we pay most of our attention to the field of relationship between felling-live and age, the number of children, gender, marital status, education, income, and the number of hours they worked respectively, try to figure out the degree of association of each variable to feeling-live. Our final analysis will be used to predict what kind of group of people are likely to lose confidence in their life and bring depression to themselves.
+
+## Data
+# Data cleaning
+```{r, include = FALSE}
+#### Workspace set-up ####
+library(janitor)
+library(tidyverse)
+
+# Load the data dictionary and the raw data and correct the variable names
+raw_data <- read_csv("AAuQurYY.csv")
+dict <- read_lines("gss_dict.txt", skip = 18) # skip is because of preamble content
+# Now we need the labels because these are the actual responses that we need
+labels_raw <- read_file("gss_labels.txt")
+
+
+#### Set-up the dictionary ####
+# What we want is a variable name and a variable definition
+variable_descriptions <- as_tibble(dict) %>% 
+  filter(value!="}") %>% 
+  mutate(value = str_replace(value, ".+%[0-9].*f[ ]{2,}", "")) %>% 
+  mutate(value = str_remove_all(value, "\"")) %>% 
+  rename(variable_description = value) %>% 
+  bind_cols(tibble(variable_name = colnames(raw_data)[-1]))
+ 
+# Now we want a variable name and the possible values
+labels_raw_tibble <- as_tibble(str_split(labels_raw, ";")[[1]]) %>% 
+  filter(row_number()!=1) %>% 
+  mutate(value = str_remove(value, "\nlabel define ")) %>% 
+  mutate(value = str_replace(value, "[ ]{2,}", "XXX")) %>% 
+  mutate(splits = str_split(value, "XXX")) %>% 
+  rowwise() %>% 
+  mutate(variable_name = splits[1], cases = splits[2]) %>% 
+  mutate(cases = str_replace_all(cases, "\n [ ]{2,}", "")) %>%
+  select(variable_name, cases) %>% 
+  drop_na()
+
+# Now we have the variable name and the different options e.g. age and 0-9, 10-19, etc.
+labels_raw_tibble <- labels_raw_tibble %>% 
+  mutate(splits = str_split(cases, "[ ]{0,}\"[ ]{0,}"))
+
+# The function sets up the regex (I know, I know, but eh: https://xkcd.com/208/)
+add_cw_text <- function(x, y){
+  if(!is.na(as.numeric(x))){
+    x_new <- paste0(y, "==", x,"~")
+  }
+  else{
+    x_new <- paste0("\"",x,"\",")
+  }
+  return(x_new)
+}
+
+# The function will be in the row, but it'll get the job done
+cw_statements <- labels_raw_tibble %>% 
+  rowwise() %>% 
+  mutate(splits_with_cw_text = list(modify(splits, add_cw_text, y = variable_name))) %>% 
+  mutate(cw_statement = paste(splits_with_cw_text, collapse = "")) %>% 
+  mutate(cw_statement = paste0("case_when(", cw_statement,"TRUE~\"NA\")")) %>% 
+  mutate(cw_statement = str_replace(cw_statement, ",\"\",",",")) %>% 
+  select(variable_name, cw_statement)
+# So for every variable we now have a case_when() statement that will convert 
+# from the number to the actual response.
+
+# Just do some finally cleanup of the regex.
+cw_statements <- 
+  cw_statements %>% 
+  mutate(variable_name = str_remove_all(variable_name, "\\r")) %>% 
+  mutate(cw_statement = str_remove_all(cw_statement, "\\r"))
+
+
+#### Apply that dictionary to the raw data ####
+# Pull out a bunch of variables and then apply the case when statement for the categorical variables
+gss <- raw_data %>% 
+  select(CASEID, 
+         agedc,
+         totchdc,
+         slm_01, 
+         sex,
+         marstat,
+         ehg3_01b,
+         srh_115, 
+         ttlincg2,
+         uhw_16gr) %>% 
+  mutate_at(vars(agedc:uhw_16gr), .funs = funs(ifelse(.>=96, NA, .))) %>% 
+  mutate_at(.vars = vars(sex:uhw_16gr),
+            .funs = funs(eval(parse(text = cw_statements %>%
+                                      filter(variable_name==deparse(substitute(.))) %>%
+                                      select(cw_statement) %>%
+                                      pull()))))
+
+# Fix the names
+gss <- gss %>% 
+  clean_names() %>% 
+  rename(age = agedc,
+         felling_live = slm_01,
+         total_children = totchdc,
+         gender = sex,
+         marital_status = marstat,
+         education = ehg3_01b,
+         average_hours_worked = uhw_16gr,
+         self_rated_mental_health = srh_115,
+         income_respondent = ttlincg2) 
+
+#### Clean up ####
+gss <- gss %>% 
+  mutate_at(vars(age:income_respondent), 
+            .funs = funs(ifelse(.=="Valid skip"|.=="Refusal"|.=="Not stated", "NA", .))) 
+
+
+write_csv(gss, "gss.csv")
+
+```
+
+# Data overview
+```{r}
+glimpse(gss)
+```
+
+In the data, the target population is all persons 15 years of age and older in Canada contains residents of the Yukon, Northwest Territories, and Nunavut and full-time residents of institutions. (1) Besides, the survey frame includes lists of telephone numbers in use (both landline and cellular) available to Statistics Canada from various sources (telephone companies, Census of population, etc.); and the Address Register (AR): List of all dwellings within the ten provinces.(2)The data was sampled by stratification such that divide ten provinces into strata, and then do the sampling in each stratum.
+
+In this dataset, we have 20602 observations and all of them are collected by telephone interview, recorders use centralized telephone facilities in five of Statistics Canada’s regional offices in Halifax, Sherbrooke, Sturgeon Falls, Winnipeg, and Edmonton from 9:00 a.m. to 9:30 p.m. on weekdays and  I from 10:00 a.m. to 5:00 p.m. on Saturdays and 1:00 p.m. to 9:00 p.m. on Sundays. (3)The member of households is selected randomly, if the interviewer refused or cancel the census, they will reschedule the time. However, the response rate of 2017 GSS is only 52.4%, so they decide to consider the households of ‘cell phone only ‘ as part of the frame.(4) Overall, the sample size we have in 2017 is 20000 but the number of interviewed people is 20602.(5)Investigators also use Address Register to the group together all telephone numbers associated with the same valid address. About 86% of available telephone numbers were linked to the AR.(6)
+
+The method that investigators use to collect data is easier to get the data immediately, and it is clear for an investigator that which person they are interviewing now, therefore they can get accurate and useful data. However, there are some drawbacks such that it is time and money-waste, and this receives a low response rate due to refusing of phone call.
+
+The data has 20602 rows and 10 columns and contains four numerical variables which are caseid, age, totoal_children, felling_live, and six categorical variables which are marital_status, Education, self_rated_mental_health, income_respondent, and average_hours_worked. In addition, there are some very similar variables we do not use in this dataset which are self-rated mental health， number of marriages, ever marriage, and income of the family. We do not choose these variables because the income of response include family and mental is a part of health.
+
+## Model
+
+```{r}
+model <- lm(gss$felling_live ~ gss$age + gss$total_children + gss$gender + gss$marital_status + gss$education + gss$income_respondent + gss$average_hours_worked)
+summary(model)
+```
+
+In this section, we build a multi-linear model by using age, total_children, gender,marital_status, education,income_respondent, and average_hours_worked to predict felling_live. One thing that should be noticed is that all of the data are collected in the provinces in Canada, so what we conclude and predict from this model is only suitable and appropriate for people in Canada.  Based on the model, we predict the value of felling_live by formula: $felling_live=\beta_0+\beta_1age+\beta_2total_children+\beta_3gender\beta_4marital_status+\beta_5education+\beta_6income_respondent+\beta_7average_hours_worked$, where beta_0 is the value of predicted  felling_live when we set every other variable to be zero, in MLR $beta_1$  to $beta_7$ are  slope coefficient for each explanatory variable, such that when we keep other variables constant, what would be the average change of felling live when one variable change for one unit.
+
+In null hypothesis testing, the p-value is the probability of obtaining test results as results actually observed under the assumption that the null hypothesis is correct. In our dataset, the p-value indicates whether the variable is significant to the model. If the p-value is small (p < 0.05), it means the variable is significant to the model. In our case, age，total_children, genderMale, arital_statusLiving common-law, marital_statusMarried, marital_statusSeparated, marital_statusSingle, never married, marital_statusWidowed, etc. While, the big p-value (p > 0,05) indicates that the variable does not significant to the model which shows that we can remove this variable, such as ducationHigh school diploma or a high school equivalency certificate, educationTrade certificate or diploma, income_respondent75,000 to 99,999. From these, we can notice that education and high income do not affect feelings about life.
+
+R-square is a statistical measure that measures how many variables can be explained by the regression model. Where 0 indicates that no variable can be explained by the model while 1 indicates that the outcome can be explained from the regression model. In our model, R-square is 0.05808 which means there are 5.808% variation that can be explained by the model.
+
+#check model
+```{r}
+# AIC
+AIC(model)
+# BIC
+BIC(model)
+# Adj r square
+summary(model)$adj.r.squared
+# Leverage Point
+a <- hatvalues(model)
+threshold <- 2 * (length(model$coefficients) / nrow(gss))
+which(a > threshold)
+# Outlier
+resi <- rstandard(model)
+which(abs(resi) > 4)
+# Diagnostic plot
+par(mfrow = c(2, 2))
+plot(model)
+# multicollinearity
+```
+
+AIC is an constant estimate measures relative distance between the unknown likelihood function and the fitting model likelihood function. Thus, a lower AIC means a model is considered to be closer to the truth. In our model, AIC is 76700.14. The lower the BIC, the more likely the model is to be a true model, because the BIC is an estimate of a function of posterior probabilities that the model is true in a particular Bayesian setting.In our model, the value of BIC is 76937.71.
+Also, there are some leverage points and outliers of our model.
+In addition, since the VIF of each variable is lower than 5, our model does not have multicollinearity.
+
+## Results
+
+Based on the model, we can find the relationship between felling_live and all of the other variables. For example, we can see age, total_children, and gender_male all have a positive beta such that they all have a positive relationship for felling life which means no matter how old they are, how many children they have and being a male will not bring a negative influence for their life. Also, we found something surprising which is not the same as what we usually think of in our life.  We noticed that people with less than a high school diploma and people who have a university certificate diploma below the bachelor's level has a positive relationship while people who went to university and has a higher diploma has a negative relationship with felling live. We may conclude that people who have higher education level is easier to lose confidence in their life compared to those who have a lower education level. In addition, we also found something that matches our real-life assumption, for an instant, people who have high-income feels more satisfied with their life than these who have low salaries and people who are married have a positive felling about their life compare to those who are separated.
+
+To summary our model, we found that variables of genderMale, marital_statusLiving common Law, marital_statusMarries,marital_statusSeparate,marital_statusWindowed, education than high school diploma or its equivalent and income _respondentLess than $25000 are the most significant factors that influence the felling live while income_respondent$125000 and more is the least significant one. 
+
+We also conclude some aspects about our model, from figure 1 which is a residuals plot that is used to visually assess wether our model fit the data, we can there is no pattern for the points, so we can see we have a good model that fit the data we have. From figure 2, we can see that this is not the normality of the errors such that we are not following the assumption of running a linear model and this assumption is not valid for our model inference. In addition, we can finger out whether it is a constant variance from Figure 3. We notice that it has a horizontal line and no pattern. Thus, we assume that error has constant variance. Our assumption is valid and model inference should also be valid. In addition, From Figure 4, We should pay more attention to the influential points which are outside to cook's distance in order to get a better result, because these points have a large effect on the parameter estimates.
+
+Note: figure 1 is a residuals plot, figure 2 is Normal Q-Q plot, figure 3 is Scale-Location plot, figure 4 is Residuals vs. Leverage plot.
+
+## Discussion
+# Plots of each variable
+```{r}
+ggplot(gss, aes(x = as.factor(gss$marital_status))) + 
+  geom_bar(stat = "count") + xlab("marital_status")+ coord_flip()
+ggplot(gss, aes(x = as.factor(gss$education))) + 
+  geom_bar(stat = "count") + xlab("education") + coord_flip()
+ggplot(gss, aes(x = as.factor(gss$income_respondent))) + 
+  geom_bar(stat = "count") + xlab("income") + coord_flip()
+ggplot(gss, aes(x = as.factor(gss$self_rated_mental_health))) + 
+  geom_bar(stat = "count") + xlab("self_rated_mental_health") + coord_flip()
+ggplot(gss, aes(x = gss$age)) + 
+  geom_histogram(color = 'grey', fill = 'pink', bins = 100) + xlab("age") 
+ggplot(gss, aes(x = as.factor(gss$gender))) + 
+  geom_bar(stat = "count") + xlab("gender") 
+ggplot(gss, aes(x = gss$total_children)) + 
+  geom_histogram(color = 'grey', fill = 'pink', bins = 10) + xlab("total_children") 
+ggplot(gss, aes(x = as.factor(gss$average_hours_worked))) + 
+  geom_bar(stat = "count") + xlab("average_hours_worked") + coord_flip()
+ggplot(gss, aes(x = as.factor(gss$felling_live))) + 
+  geom_bar(stat = "count") + xlab("feeling_live")
+```
+
+-The above plots have showed the characteristics of the respondents. Based on the plots, we see that most of the respondents are married, so from this perspective, we might conclude getting married do bring people more satisfaction in life. Also, our data covers people from most age period, but most of the respondents are around the age of 80, so it might explain why many respondents’ income is less than 25000, and hour worked is valid skip. Overall, the plot based on the variable feeling_live showed that the majority of respondents are happy about their lives.
+
+- This data set come from the 2017 General Social Survey (GSS) on the Family. Since the target population of this survey is  all non-institutionalized persons 15 years of age and older, living in the 10 provinces of Canada, the data set contains some observations that contain missing values. Therefore, we use mutate function to record these observations as NA to help us analysis the data set better.
+
+- According to the weakness of our data set, as we can see from the age plot, most of responders are over 80 years old. This weakness may effect the accuracy of analysis. In addition, since the target population is under 15 years old, there are some information may missed such as overall felling of life of children. For the approach of sampling, each record in the survey frame was assigned to a stratum within its province, a simple random sample without replacement of records was next performed in each stratum.
+
+# Weaknesses
+
+In regards to the weakness in our data set, the range of our sample size is relatively small, which only have five regions, Halifax, Sherbrooke, Sturgeon Falls, Winnipeg, and Edmonton respectively. Therefore, we are not allowed to predict felling-live in other places in Canada, as each place has a different lifestyle and local policies, the factors leading to people's life satisfaction will also be different. Furthermore people interviewed in this data set are not distributed well in every age group, in particular people aged 80 years old occupies the majority of target population. Thus the result we have is more suitable for aged people rather than those in other age groups. Last but not the least, the data may not be very accurate, because some people may fail to respond while another one may think it is a fraudulent call and do not provide the real data. Also, some people might provide us an unreal data because some of the questions might invade their privacy, such as income. Thus, the data set we got might not be so accurate due to these reasons.
+
+# Next Steps
+
+```{r}
+adjuct_model <- step(model, direction = "both")
+```
+
+By using  forward selection and backward elimination, we try to improve our data. However, the AIC indicates the model is good enough according to these methods, thus we can not to improve our model through this way.
+Thus, to improve our dataset, we can take some actions to avoid our weakness in the dataset. First of all, we can increase our sample size by collecting data from other provinces in Canada, and we may add some variables such as welfare policies in our data, thus we can predict a better result for all Canadians. Also, we can interview people from other countries like America or China to make a comparison between them to see how does the factors that influence felling-live vary across countries. Besides, we could change our method to collect data, we should have multiple ways for people to access this research such as online survey or go to different regions send out questionnaires to get more efficient data, thus we can have more people to join the research and get more useful data. 
+
+
+## References
+
+#1
+Kenton, W. (2020, September 21). How Multiple Linear Regression Works. Retrieved October 19, 2020, from https://www.investopedia.com/terms/m/mlr.asp
+
+#2
+Multiple Linear Regression Analysis. (n.d.). Retrieved October 19, 2020, from http://reliawiki.org/index.php/Multiple_Linear_Regression_Analysis
+
+#3
+Stastic  Canada (2020, April). General Social Survey, Cycle 31 : Families
+Public Use Microdata File Documentation and User’s Guide, fro https://sda-artsci-utoronto-ca.myaccess.library.utoronto.ca/sdaweb/dli2/gss/gss31/gss31/more_doc/GSS31_User_Guide.pdf
+
+#4
+Data from, https://sda-artsci-utoronto-ca.myaccess.library.utoronto.ca/cgi-bin/sda/hsda?harcsda4+gss31
+
+#5
+```{r}
+citation("tidyverse")
+citation("janitor")
+```
+
+#6
+DAta cleaning code given by Rohan Alexander and Sam Caetano, rohan.alexander@utoronto.ca
+
